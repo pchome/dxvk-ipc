@@ -1,0 +1,413 @@
+From ce1498077e1326d0b9083886392cd17b827de0b3 Mon Sep 17 00:00:00 2001
+From: pchome <pchome@users.noreply.github.com>
+Date: Mon, 10 Jun 2019 01:06:16 +0300
+Subject: [PATCH 1/4] [dxvk] Some kind of IPC
+
+Share stats counters and DXVK data
+---
+ src/dxvk/ipc/dxvk_ipc.cpp | 199 ++++++++++++++++++++++++++++++++++++++
+ src/dxvk/ipc/dxvk_ipc.h   | 172 ++++++++++++++++++++++++++++++++
+ src/dxvk/meson.build      |   2 +
+ 3 files changed, 373 insertions(+)
+ create mode 100644 src/dxvk/ipc/dxvk_ipc.cpp
+ create mode 100644 src/dxvk/ipc/dxvk_ipc.h
+
+diff --git a/src/dxvk/ipc/dxvk_ipc.cpp b/src/dxvk/ipc/dxvk_ipc.cpp
+new file mode 100644
+index 00000000..05fa002e
+--- /dev/null
++++ b/src/dxvk/ipc/dxvk_ipc.cpp
+@@ -0,0 +1,199 @@
++#include <cstring>
++#include <version.h>
++
++#include "dxvk_ipc.h"
++
++namespace dxvk::ipc {
++
++  Ipc::Ipc(
++    const Rc<DxvkDevice>& device)
++  : m_device          (device),
++    m_fpsString       ("0.0"),
++    m_frametimeString ("0.0"),
++    //m_frametimeMin    ("0.0"),
++    //m_frametimeMax    ("0.0"),
++    m_prevFpsUpdate (Clock::now()),
++    m_prevFtgUpdate (Clock::now()),
++    m_prevUpdate    (Clock::now()) {
++    // init fs
++    fs::create_directory(ipcDir);
++    this->reportIpcConstElements();
++  }
++
++
++  Ipc::~Ipc() {
++    this->resetIpcData();
++  }
++
++
++  void Ipc::update() {
++    this->fpsUpdate();
++    this->statsUpdate();
++  }
++
++
++  void Ipc::report() {
++    m_updateCount +=1;
++
++    TimePoint now = Clock::now();
++    TimeDiff elapsedUpd = std::chrono::duration_cast<TimeDiff>(now - m_prevUpdate);
++
++    if (elapsedUpd.count() >= ReportInterval) {
++      this->reportIpcElement(IpcElement::Framerate, m_fpsString);
++
++      // calculate min/max frametime
++      this->reportFrametime();
++      this->reportStats();
++      this->reportCompiler();
++
++
++      m_prevUpdate = now;
++      m_updateCount = 0;
++    }
++  }
++
++  void Ipc::reportIpcConstElements() {
++    // Set up constant data
++    VkPhysicalDeviceProperties props = m_device->adapter()->deviceProperties();
++    m_deviceName = props.deviceName;
++
++    m_driverVer  = str::format(
++      VK_VERSION_MAJOR(props.driverVersion), ".",
++      VK_VERSION_MINOR(props.driverVersion), ".",
++      VK_VERSION_PATCH(props.driverVersion));
++
++    m_vulkanVer  = str::format(
++      VK_VERSION_MAJOR(props.apiVersion), ".",
++      VK_VERSION_MINOR(props.apiVersion), ".",
++      VK_VERSION_PATCH(props.apiVersion));
++
++    // const data
++    this->reportIpcElement(IpcElement::DxvkVersion,   DXVK_VERSION);
++    this->reportIpcElement(IpcElement::DxvkClientApi, m_device->clientApi());
++    this->reportIpcElement(IpcElement::DeviceName,    m_deviceName);
++    this->reportIpcElement(IpcElement::DeviceDriver,  m_driverVer);
++    this->reportIpcElement(IpcElement::DeviceVulkan,  m_vulkanVer);
++
++    Logger::info("Ipc: Enabled");
++  }
++
++
++  Rc<Ipc> Ipc::createIpc(const Rc<DxvkDevice>& device) {
++    return env::getEnvVar("DXVK_IPC") == "1"
++      ? new Ipc(device)
++      : nullptr;
++  }
++
++  void Ipc::fpsUpdate() {
++    m_frameCount += 1;
++
++    TimePoint now = Clock::now();
++    TimeDiff elapsedFps = std::chrono::duration_cast<TimeDiff>(now - m_prevFpsUpdate);
++    TimeDiff elapsedFtg = std::chrono::duration_cast<TimeDiff>(now - m_prevFtgUpdate);
++    m_prevFtgUpdate = now;
++
++    // Update FPS string
++    if (elapsedFps.count() >= UpdateInterval) {
++      const int64_t fps = (10'000'000ll * m_frameCount) / elapsedFps.count();
++      m_fpsString = str::format(fps / 10, ".", fps % 10);
++
++      m_prevFpsUpdate = now;
++      m_frameCount = 0;
++    }
++
++    // Update frametime stuff
++    m_dataPoints[m_dataPointId] = float(elapsedFtg.count());
++    m_dataPointId = (m_dataPointId + 1) % NumDataPoints;
++
++    m_frametimeString = str::format(
++      uint32_t(m_dataPointId / 100.0f) / 10,
++      ".",
++      uint32_t(m_dataPointId / 100.0f) % 10);
++  }
++
++  void Ipc::statsUpdate() {
++    // For some counters, we'll display the absolute value,
++    // for others, the average counter increment per frame.
++    DxvkStatCounters nextCounters = m_device->getStatCounters();
++    m_diffCounters = nextCounters.diff(m_prevCounters);
++    m_prevCounters = nextCounters;
++  }
++
++  void Ipc::reportFrametime() {
++    // 60 FPS = optimal, 10 FPS = worst
++    //const float targetUs =  16'666.6f;
++    //const float minUs    =   5'000.0f;
++    //const float maxUs    = 100'000.0f;
++
++    // Ten times the maximum/minimum number
++    // of milliseconds for a single frame
++    uint32_t minMs = 0xFFFFFFFFu;
++    uint32_t maxMs = 0x00000000u;
++
++    // Paint the time points
++    for (uint32_t i = 0; i < NumDataPoints; i++) {
++      float us = m_dataPoints[(m_dataPointId + i) % NumDataPoints];
++
++      minMs = std::min(minMs, uint32_t(us / 100.0f));
++      maxMs = std::max(maxMs, uint32_t(us / 100.0f));
++    }
++
++    //m_frametimeMin = str::format(minMs / 10, ".", minMs % 10);
++    //m_frametimeMax = str::format(maxMs / 10, ".", maxMs % 10);
++
++    this->reportIpcElement(IpcElement::Frametime,    m_frametimeString);
++    this->reportIpcElement(IpcElement::FrametimeMin, str::format(minMs / 10, ".", minMs % 10));
++    this->reportIpcElement(IpcElement::FrametimeMax, str::format(maxMs / 10, ".", maxMs % 10));
++  }
++
++  void Ipc::reportStats() {
++    const uint64_t frameCount = std::max<uint64_t>(m_diffCounters.getCtr(DxvkStatCounter::QueuePresentCount), 1);
++
++    const uint64_t gpCalls = m_diffCounters.getCtr(DxvkStatCounter::CmdDrawCalls)       / frameCount;
++    const uint64_t cpCalls = m_diffCounters.getCtr(DxvkStatCounter::CmdDispatchCalls)   / frameCount;
++    const uint64_t rpCalls = m_diffCounters.getCtr(DxvkStatCounter::CmdRenderPassCount) / frameCount;
++
++    const uint64_t gpCount = m_prevCounters.getCtr(DxvkStatCounter::PipeCountGraphics);
++    const uint64_t cpCount = m_prevCounters.getCtr(DxvkStatCounter::PipeCountCompute);
++
++    const uint64_t memAllocated = m_prevCounters.getCtr(DxvkStatCounter::MemoryAllocated);
++    const uint64_t memUsed      = m_prevCounters.getCtr(DxvkStatCounter::MemoryUsed);
++
++    const uint64_t numSubmits = m_diffCounters.getCtr(DxvkStatCounter::QueueSubmitCount) / frameCount;
++
++    this->reportIpcElement(IpcElement::Submissions,     numSubmits);
++
++    this->reportIpcElement(IpcElement::DrawCalls,       gpCalls);
++    this->reportIpcElement(IpcElement::DispatchCalls,   cpCalls);
++    this->reportIpcElement(IpcElement::RenderPasses,    rpCalls);
++
++    this->reportIpcElement(IpcElement::GraphicsPipelines, gpCount);
++    this->reportIpcElement(IpcElement::ComputePipelines,  cpCount);
++
++    this->reportIpcElement(IpcElement::MemoryUsed,      memUsed);
++    this->reportIpcElement(IpcElement::MemoryAllocated, memAllocated);
++  }
++
++  void Ipc::reportCompiler() {
++    auto now    = Clock::now();
++    bool doShow = m_prevCounters.getCtr(DxvkStatCounter::PipeCompilerBusy);
++
++    if (m_prevCounters.getCtr(DxvkStatCounter::PipeCompilerBusy)
++     && m_diffCounters.getCtr(DxvkStatCounter::PipeCompilerBusy))
++      m_compilerShowTime = now;
++
++    if (!doShow) {
++      doShow |= std::chrono::duration_cast<std::chrono::milliseconds>(now - m_compilerShowTime)
++              < std::chrono::milliseconds(1000);
++    }
++
++    this->reportIpcElement(IpcElement::CompilerActivity, doShow ? 1 : 0);
++  }
++
++  void Ipc::resetIpcData() {
++    for(auto& p: fs::directory_iterator(ipcDir))
++      if (p.is_regular_file())
++        std::ofstream(p.path()) << "n/a\n";
++  }
++
++}
+diff --git a/src/dxvk/ipc/dxvk_ipc.h b/src/dxvk/ipc/dxvk_ipc.h
+new file mode 100644
+index 00000000..a80e93a2
+--- /dev/null
++++ b/src/dxvk/ipc/dxvk_ipc.h
+@@ -0,0 +1,172 @@
++#pragma once
++
++#include "../dxvk_device.h"
++#include "../dxvk_stats.h"
++#include "../util/util_env.h"
++
++#ifdef __WINE__
++#pragma push_macro("_WIN32")
++//request UNIX ABI from <filesystem>
++#undef _WIN32
++#endif
++
++#include <filesystem>
++namespace fs = std::filesystem;
++
++#ifdef __WINE__
++#pragma pop_macro("_WIN32")
++#endif
++
++#include <unordered_map>
++
++namespace dxvk::ipc {
++
++  /**
++   * \brief IPC element
++   *
++   * These flags can be used to enable
++   * or disable IPC elements on demand.
++   */
++  enum class IpcElement {
++    DeviceName        = 0,
++    DeviceDriver      = 1,
++    DeviceVulkan      = 2,
++    DxvkVersion       = 3,
++    DxvkClientApi     = 4,
++    Framerate         = 5,
++    Frametime         = 6,
++    FrametimeMin      = 7,
++    FrametimeMax      = 8,
++    DrawCalls         = 9,
++    DispatchCalls     = 10,
++    RenderPasses      = 11,
++    Submissions       = 12,
++    GraphicsPipelines = 13,
++    ComputePipelines  = 14,
++    MemoryUsed        = 15,
++    MemoryAllocated   = 16,
++    CompilerActivity  = 17,
++  };
++
++  using IpcElements = Flags<IpcElement>;
++
++  /**
++   * \brief DXVK IPC
++   *
++   * Can be used by the presentation backend to
++   * display performance and driver information.
++   */
++  class Ipc : public RcObject {
++    using Clock     = std::chrono::high_resolution_clock;
++    using TimeDiff  = std::chrono::microseconds;
++    using TimePoint = typename Clock::time_point;
++
++    constexpr static uint32_t NumDataPoints  = 300;
++    constexpr static int64_t  UpdateInterval = 500'000;
++    constexpr static int64_t  ReportInterval = 1'000'000;
++
++
++  public:
++
++    Ipc(const Rc<DxvkDevice>& device);
++    ~Ipc();
++
++    /**
++     * \brief Update IPC
++     *
++     * Updates the data to display.
++     * Should be called once per frame.
++     */
++    void update();
++    void report();
++
++    /**
++     * \brief Creates the IPC
++     *
++     * Creates and initializes the IPC if the
++     * \c DXVK_IPC environment variable is set.
++     * \param [in] device The DXVK device
++     * \returns IPC object, if it was created.
++     */
++    static Rc<Ipc> createIpc(
++      const Rc<DxvkDevice>& device);
++
++
++
++  private:
++
++    const Rc<DxvkDevice>  m_device;
++
++    const fs::path ipcDir = fs::temp_directory_path() / "dxvk";
++
++    std::string m_deviceName;
++    std::string m_driverVer;
++    std::string m_vulkanVer;
++
++    std::string m_fpsString;
++    std::string m_frametimeString;
++
++
++    TimePoint m_prevFpsUpdate;
++    TimePoint m_prevFtgUpdate;
++    int64_t   m_frameCount = 0;
++
++    TimePoint m_prevUpdate;
++    int64_t   m_updateCount = 0;
++
++    std::array<float, NumDataPoints>  m_dataPoints  = {};
++    uint32_t                          m_dataPointId = 0;
++
++    DxvkStatCounters  m_prevCounters;
++    DxvkStatCounters  m_diffCounters;
++
++    Clock::time_point m_compilerShowTime;
++
++    const std::unordered_map<IpcElement, fs::path> m_ipcElements = {{
++      // static
++      { IpcElement::DeviceName,       "dev_name"       },
++      { IpcElement::DeviceDriver,     "dev_driver"     },
++      { IpcElement::DeviceVulkan,     "dev_vulkan"     },
++      { IpcElement::DxvkVersion,      "version"        },
++      { IpcElement::DxvkClientApi,    "dx_api"         },
++      // dinamic
++      { IpcElement::Framerate,        "fps"            },
++      { IpcElement::Frametime,        "frametime"      },
++      { IpcElement::FrametimeMin,     "frametime_min"  },
++      { IpcElement::FrametimeMax,     "frametime_max"  },
++      { IpcElement::DrawCalls,        "draw_calls"     },
++      { IpcElement::DispatchCalls,    "dispatch_calls" },
++      { IpcElement::RenderPasses,     "render_passes"  },
++      { IpcElement::Submissions,      "submissions"    },
++      { IpcElement::GraphicsPipelines,"graphics_pipelines"      },
++      { IpcElement::ComputePipelines, "compute_pipelines"      },
++      { IpcElement::MemoryUsed,       "mem_used"       },
++      { IpcElement::MemoryAllocated,  "mem_alloc"      },
++      { IpcElement::CompilerActivity, "compiler"       },
++    }};
++
++    template<typename T>
++      void reportIpcElement(const IpcElement elm, const T& data) {
++        fs::path tempfile, datafile, filename = m_ipcElements.at(elm);//[elm];
++
++        tempfile  = ipcDir / ".tmp";
++        tempfile += filename;
++        datafile  = ipcDir / filename;
++
++        // sync
++        std::ofstream(tempfile) << data << "\n";
++        fs::rename(tempfile, datafile);
++      }
++
++    void fpsUpdate();
++    void statsUpdate();
++
++    void reportStats();
++    void reportFrametime();
++    void reportCompiler();
++    void reportIpcConstElements();
++
++    void resetIpcData();
++  };
++
++}
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index 64f20998..a4c4f747 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -100,6 +100,8 @@ dxvk_src = files([
+   'hud/dxvk_hud_fps.cpp',
+   'hud/dxvk_hud_renderer.cpp',
+   'hud/dxvk_hud_stats.cpp',
++
++  'ipc/dxvk_ipc.cpp',
+ ])
+ 
+ thread_dep = dependency('threads')
+-- 
+2.21.0
+

@@ -1,0 +1,86 @@
+From 026173993b557a3a82f76c3607ea139555aef425 Mon Sep 17 00:00:00 2001
+From: pchome <pchome@users.noreply.github.com>
+Date: Mon, 10 Jun 2019 01:19:10 +0300
+Subject: [PATCH 3/4] [d3d9] Enable IPC
+
+---
+ src/d3d9/d3d9_swapchain.cpp | 12 ++++++++++++
+ src/d3d9/d3d9_swapchain.h   |  4 ++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index cc2672e2..f9a2cd58 100644
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -31,6 +31,7 @@ namespace dxvk {
+ 
+     CreateBackBuffer();
+     CreateHud();
++    CreateIpc();
+ 
+     InitRenderState();
+     InitSamplers();
+@@ -374,6 +375,9 @@ namespace dxvk {
+     if (m_hud != nullptr)
+       m_hud->update();
+ 
++    if (m_ipc != nullptr)
++      m_ipc->update();
++
+     for (uint32_t i = 0; i < SyncInterval || i < 1; i++) {
+       m_context->beginRecording(
+         m_device->createCommandList());
+@@ -463,6 +467,9 @@ namespace dxvk {
+ 
+       if (m_hud != nullptr)
+         m_hud->render(m_context, info.imageExtent);
++
++      if (m_ipc != nullptr)
++        m_ipc->report();
+       
+       if (i + 1 >= SyncInterval) {
+         DxvkEventRevision eventRev;
+@@ -741,6 +748,11 @@ namespace dxvk {
+   }
+ 
+ 
++  void D3D9SwapChainEx::CreateIpc() {
++    m_ipc = ipc::Ipc::createIpc(m_device);
++  }
++
++
+   void D3D9SwapChainEx::InitRenderState() {
+     m_iaState.primitiveTopology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+     m_iaState.primitiveRestart  = VK_FALSE;
+diff --git a/src/d3d9/d3d9_swapchain.h b/src/d3d9/d3d9_swapchain.h
+index afb67ef1..0347dbd3 100644
+--- a/src/d3d9/d3d9_swapchain.h
++++ b/src/d3d9/d3d9_swapchain.h
+@@ -4,6 +4,7 @@
+ #include "d3d9_format.h"
+ 
+ #include "../dxvk/hud/dxvk_hud.h"
++#include "../dxvk/ipc/dxvk_ipc.h"
+ 
+ #include <vector>
+ 
+@@ -111,6 +112,7 @@ namespace dxvk {
+     Rc<DxvkImageView>       m_swapImageView;
+ 
+     Rc<hud::Hud>            m_hud;
++    Rc<ipc::Ipc>            m_ipc;
+ 
+     DxvkInputAssemblyState  m_iaState;
+     DxvkRasterizerState     m_rsState;
+@@ -152,6 +154,8 @@ namespace dxvk {
+ 
+     void CreateHud();
+ 
++    void CreateIpc();
++
+     void InitRenderState();
+ 
+     void InitSamplers();
+-- 
+2.21.0
+
