@@ -1,0 +1,149 @@
+From 465f2443db1da2f8f3b8598df3887cac14dce613 Mon Sep 17 00:00:00 2001
+From: Joshua Ashton <joshua@froggi.es>
+Date: Sat, 20 Apr 2019 21:57:05 +0100
+Subject: [PATCH] [dxvk] Add sampler count display to HUD
+
+Use 'sampler' in DXVK_HUD env var
+---
+ src/dxvk/dxvk_device.cpp         |  5 ++++-
+ src/dxvk/dxvk_device.h           |  2 ++
+ src/dxvk/dxvk_stats.h            |  1 +
+ src/dxvk/hud/dxvk_hud_config.cpp |  1 +
+ src/dxvk/hud/dxvk_hud_config.h   |  1 +
+ src/dxvk/hud/dxvk_hud_stats.cpp  | 21 +++++++++++++++++++++
+ src/dxvk/hud/dxvk_hud_stats.h    |  5 +++++
+ 7 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+index 4d85fb2c..0f617985 100644
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -210,7 +210,9 @@ namespace dxvk {
+   
+   Rc<DxvkSampler> DxvkDevice::createSampler(
+     const DxvkSamplerCreateInfo&  createInfo) {
+-    return new DxvkSampler(m_vkd, createInfo);
++    Rc<DxvkSampler> sampler = new DxvkSampler(m_vkd, createInfo);
++    m_numSamplers++;
++    return sampler;
+   }
+   
+   
+@@ -237,6 +239,7 @@ namespace dxvk {
+     result.setCtr(DxvkStatCounter::PipeCountGraphics, pipe.numGraphicsPipelines);
+     result.setCtr(DxvkStatCounter::PipeCountCompute,  pipe.numComputePipelines);
+     result.setCtr(DxvkStatCounter::PipeCompilerBusy,  m_pipelineManager->isCompilingShaders());
++    result.setCtr(DxvkStatCounter::SamplerCount,      m_numSamplers.load());
+ 
+     std::lock_guard<sync::Spinlock> lock(m_statLock);
+     result.merge(m_statCounters);
+diff --git a/src/dxvk/dxvk_device.h b/src/dxvk/dxvk_device.h
+index d2af2e39..1e8394e5 100644
+--- a/src/dxvk/dxvk_device.h
++++ b/src/dxvk/dxvk_device.h
+@@ -433,6 +433,8 @@ namespace dxvk {
+     std::mutex                  m_submissionLock;
+     DxvkDeviceQueue             m_graphicsQueue;
+     DxvkDeviceQueue             m_presentQueue;
++
++    std::atomic<uint32_t>       m_numSamplers = { 0 };
+     
+     DxvkRecycler<DxvkCommandList,    16> m_recycledCommandLists;
+     DxvkRecycler<DxvkDescriptorPool, 16> m_recycledDescriptorPools;
+diff --git a/src/dxvk/dxvk_stats.h b/src/dxvk/dxvk_stats.h
+index 5c5243aa..29ce8d8d 100644
+--- a/src/dxvk/dxvk_stats.h
++++ b/src/dxvk/dxvk_stats.h
+@@ -22,6 +22,7 @@ namespace dxvk {
+     PipeCompilerBusy,         ///< Boolean indicating compiler activity
+     QueueSubmitCount,         ///< Number of command buffer submissions
+     QueuePresentCount,        ///< Number of present calls / frames
++    SamplerCount,             ///< Number of samplers
+     NumCounters,              ///< Number of counters available
+   };
+   
+diff --git a/src/dxvk/hud/dxvk_hud_config.cpp b/src/dxvk/hud/dxvk_hud_config.cpp
+index f9ed06a0..59ef0be6 100644
+--- a/src/dxvk/hud/dxvk_hud_config.cpp
++++ b/src/dxvk/hud/dxvk_hud_config.cpp
+@@ -11,6 +11,7 @@ namespace dxvk::hud {
+     { "drawcalls",    HudElement::StatDrawCalls     },
+     { "submissions",  HudElement::StatSubmissions   },
+     { "pipelines",    HudElement::StatPipelines     },
++    { "samplers",     HudElement::StatSamplers     },
+     { "memory",       HudElement::StatMemory        },
+     { "version",      HudElement::DxvkVersion       },
+     { "api",          HudElement::DxvkClientApi     },
+diff --git a/src/dxvk/hud/dxvk_hud_config.h b/src/dxvk/hud/dxvk_hud_config.h
+index bd763a31..38b5a949 100644
+--- a/src/dxvk/hud/dxvk_hud_config.h
++++ b/src/dxvk/hud/dxvk_hud_config.h
+@@ -21,6 +21,7 @@ namespace dxvk::hud {
+     DxvkVersion       = 7,
+     DxvkClientApi     = 8,
+     CompilerActivity  = 9,
++    StatSamplers      = 10
+   };
+   
+   using HudElements = Flags<HudElement>;
+diff --git a/src/dxvk/hud/dxvk_hud_stats.cpp b/src/dxvk/hud/dxvk_hud_stats.cpp
+index 7160f700..d41bffa7 100644
+--- a/src/dxvk/hud/dxvk_hud_stats.cpp
++++ b/src/dxvk/hud/dxvk_hud_stats.cpp
+@@ -36,6 +36,9 @@ namespace dxvk::hud {
+     
+     if (m_elements.test(HudElement::StatPipelines))
+       position = this->printPipelineStats(context, renderer, position);
++
++    if (m_elements.test(HudElement::StatSamplers))
++      position = this->printSamplerCount(context, renderer, position);
+     
+     if (m_elements.test(HudElement::StatMemory))
+       position = this->printMemoryStats(context, renderer, position);
+@@ -176,12 +179,30 @@ namespace dxvk::hud {
+     return { position.x, position.y + 24.0f };
+   }
+   
++
++  HudPos HudStats::printSamplerCount(
++    const Rc<DxvkContext>&  context,
++          HudRenderer&      renderer,
++          HudPos            position) {
++    const uint64_t samplerCount = m_prevCounters.getCtr(DxvkStatCounter::SamplerCount);
++    
++    const std::string strGpCount = str::format("Sampler count: ", samplerCount);
++    
++    renderer.drawText(context, 16.0f,
++      { position.x, position.y },
++      { 1.0f, 1.0f, 1.0f, 1.0f },
++      strGpCount);
++    
++    return { position.x, position.y + 24.0f };
++  }
++
+   
+   HudElements HudStats::filterElements(HudElements elements) {
+     return elements & HudElements(
+       HudElement::StatDrawCalls,
+       HudElement::StatSubmissions,
+       HudElement::StatPipelines,
++      HudElement::StatSamplers,
+       HudElement::StatMemory,
+       HudElement::CompilerActivity);
+   }
+diff --git a/src/dxvk/hud/dxvk_hud_stats.h b/src/dxvk/hud/dxvk_hud_stats.h
+index 89009af5..81afebce 100644
+--- a/src/dxvk/hud/dxvk_hud_stats.h
++++ b/src/dxvk/hud/dxvk_hud_stats.h
+@@ -64,6 +64,11 @@ namespace dxvk::hud {
+       const Rc<DxvkContext>&  context,
+             HudRenderer&      renderer,
+             HudPos            position);
++
++    HudPos printSamplerCount(
++      const Rc<DxvkContext>&  context,
++            HudRenderer&      renderer,
++            HudPos            position);
+     
+     static HudElements filterElements(HudElements elements);
+     

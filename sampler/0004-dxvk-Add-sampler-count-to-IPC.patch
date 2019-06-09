@@ -1,0 +1,50 @@
+From 4f7ff8eab4da12da8ca06e7269946194a951136c Mon Sep 17 00:00:00 2001
+From: pchome <pchome@users.noreply.github.com>
+Date: Mon, 10 Jun 2019 01:31:38 +0300
+Subject: [PATCH 4/4] [dxvk] Add sampler count to IPC
+
+---
+ src/dxvk/ipc/dxvk_ipc.cpp | 4 ++++
+ src/dxvk/ipc/dxvk_ipc.h   | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/src/dxvk/ipc/dxvk_ipc.cpp b/src/dxvk/ipc/dxvk_ipc.cpp
+index 05fa002e..29697c90 100644
+--- a/src/dxvk/ipc/dxvk_ipc.cpp
++++ b/src/dxvk/ipc/dxvk_ipc.cpp
+@@ -161,8 +161,12 @@ namespace dxvk::ipc {
+ 
+     const uint64_t numSubmits = m_diffCounters.getCtr(DxvkStatCounter::QueueSubmitCount) / frameCount;
+ 
++    const uint64_t samplerCount = m_prevCounters.getCtr(DxvkStatCounter::SamplerCount);
++
+     this->reportIpcElement(IpcElement::Submissions,     numSubmits);
+ 
++    this->reportIpcElement(IpcElement::Samplers,        samplerCount);
++
+     this->reportIpcElement(IpcElement::DrawCalls,       gpCalls);
+     this->reportIpcElement(IpcElement::DispatchCalls,   cpCalls);
+     this->reportIpcElement(IpcElement::RenderPasses,    rpCalls);
+diff --git a/src/dxvk/ipc/dxvk_ipc.h b/src/dxvk/ipc/dxvk_ipc.h
+index a80e93a2..1e669b35 100644
+--- a/src/dxvk/ipc/dxvk_ipc.h
++++ b/src/dxvk/ipc/dxvk_ipc.h
+@@ -46,6 +46,7 @@ namespace dxvk::ipc {
+     MemoryUsed        = 15,
+     MemoryAllocated   = 16,
+     CompilerActivity  = 17,
++    Samplers          = 18,
+   };
+ 
+   using IpcElements = Flags<IpcElement>;
+@@ -143,6 +144,7 @@ namespace dxvk::ipc {
+       { IpcElement::MemoryUsed,       "mem_used"       },
+       { IpcElement::MemoryAllocated,  "mem_alloc"      },
+       { IpcElement::CompilerActivity, "compiler"       },
++      { IpcElement::Samplers,         "samplers"       },
+     }};
+ 
+     template<typename T>
+-- 
+2.21.0
+
