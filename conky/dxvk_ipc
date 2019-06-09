@@ -1,0 +1,10 @@
+ipc_file=/tmp/dxvk/$1
+ipc_data="N/A"
+
+if [ -f $ipc_file ]; then
+  ipc_data=$(cat $ipc_file)
+fi
+
+chars=$(echo -n $ipc_data | wc -c)
+[ $chars -gt 1 ] && space= || space=' '
+echo -n "$ipc_data$space"

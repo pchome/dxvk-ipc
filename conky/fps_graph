@@ -1,0 +1,1 @@
+[ -f /tmp/dxvk/fps ] && cat /tmp/dxvk/fps | awk -F. '{if ($1 == "n/a") print 0; else if ($1 > 100) print 100; else print $1;}' || echo 0;
