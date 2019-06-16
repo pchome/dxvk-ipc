@@ -1,1 +1,3 @@
 *.patch binary
+conky/*.conf linguist-language=Lua
+conky/dxvk_ipc linguist-language=Bash
