@@ -1,0 +1,90 @@
+From 14857073d63b05cf32bc94f68c105e3f336b2109 Mon Sep 17 00:00:00 2001
+From: pchome <pchome@users.noreply.github.com>
+Date: Sun, 16 Jun 2019 10:37:32 +0300
+Subject: [PATCH] [dxvk] Report raw fps/frametime data
+
+---
+ src/dxvk/ipc/dxvk_ipc.cpp | 23 ++++++-----------------
+ src/dxvk/ipc/dxvk_ipc.h   |  4 ++--
+ 2 files changed, 8 insertions(+), 19 deletions(-)
+
+diff --git a/src/dxvk/ipc/dxvk_ipc.cpp b/src/dxvk/ipc/dxvk_ipc.cpp
+index 29697c90..5c74ca03 100644
+--- a/src/dxvk/ipc/dxvk_ipc.cpp
++++ b/src/dxvk/ipc/dxvk_ipc.cpp
+@@ -8,10 +8,6 @@ namespace dxvk::ipc {
+   Ipc::Ipc(
+     const Rc<DxvkDevice>& device)
+   : m_device          (device),
+-    m_fpsString       ("0.0"),
+-    m_frametimeString ("0.0"),
+-    //m_frametimeMin    ("0.0"),
+-    //m_frametimeMax    ("0.0"),
+     m_prevFpsUpdate (Clock::now()),
+     m_prevFtgUpdate (Clock::now()),
+     m_prevUpdate    (Clock::now()) {
+@@ -39,7 +35,7 @@ namespace dxvk::ipc {
+     TimeDiff elapsedUpd = std::chrono::duration_cast<TimeDiff>(now - m_prevUpdate);
+ 
+     if (elapsedUpd.count() >= ReportInterval) {
+-      this->reportIpcElement(IpcElement::Framerate, m_fpsString);
++      this->reportIpcElement(IpcElement::Framerate, m_fpsRaw);
+ 
+       // calculate min/max frametime
+       this->reportFrametime();
+@@ -94,8 +90,7 @@ namespace dxvk::ipc {
+ 
+     // Update FPS string
+     if (elapsedFps.count() >= UpdateInterval) {
+-      const int64_t fps = (10'000'000ll * m_frameCount) / elapsedFps.count();
+-      m_fpsString = str::format(fps / 10, ".", fps % 10);
++      m_fpsRaw = (10'000'000ll * m_frameCount) / elapsedFps.count();
+ 
+       m_prevFpsUpdate = now;
+       m_frameCount = 0;
+@@ -105,10 +100,7 @@ namespace dxvk::ipc {
+     m_dataPoints[m_dataPointId] = float(elapsedFtg.count());
+     m_dataPointId = (m_dataPointId + 1) % NumDataPoints;
+ 
+-    m_frametimeString = str::format(
+-      uint32_t(m_dataPointId / 100.0f) / 10,
+-      ".",
+-      uint32_t(m_dataPointId / 100.0f) % 10);
++    m_frametimeRaw = uint32_t(m_dataPointId / 100.0f);
+   }
+ 
+   void Ipc::statsUpdate() {
+@@ -138,12 +130,9 @@ namespace dxvk::ipc {
+       maxMs = std::max(maxMs, uint32_t(us / 100.0f));
+     }
+ 
+-    //m_frametimeMin = str::format(minMs / 10, ".", minMs % 10);
+-    //m_frametimeMax = str::format(maxMs / 10, ".", maxMs % 10);
+-
+-    this->reportIpcElement(IpcElement::Frametime,    m_frametimeString);
+-    this->reportIpcElement(IpcElement::FrametimeMin, str::format(minMs / 10, ".", minMs % 10));
+-    this->reportIpcElement(IpcElement::FrametimeMax, str::format(maxMs / 10, ".", maxMs % 10));
++    this->reportIpcElement(IpcElement::Frametime,    m_frametimeRaw);
++    this->reportIpcElement(IpcElement::FrametimeMin, minMs);
++    this->reportIpcElement(IpcElement::FrametimeMax, maxMs);
+   }
+ 
+   void Ipc::reportStats() {
+diff --git a/src/dxvk/ipc/dxvk_ipc.h b/src/dxvk/ipc/dxvk_ipc.h
+index 1e669b35..839e3222 100644
+--- a/src/dxvk/ipc/dxvk_ipc.h
++++ b/src/dxvk/ipc/dxvk_ipc.h
+@@ -104,8 +104,8 @@ namespace dxvk::ipc {
+     std::string m_driverVer;
+     std::string m_vulkanVer;
+ 
+-    std::string m_fpsString;
+-    std::string m_frametimeString;
++    int64_t  m_fpsRaw = 0;
++    uint32_t m_frametimeRaw = 0;
+ 
+ 
+     TimePoint m_prevFpsUpdate;
+-- 
+2.22.0
+
