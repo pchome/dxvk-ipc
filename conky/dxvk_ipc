@@ -1,10 +1,37 @@
 ipc_file=/tmp/dxvk/$1
 ipc_data="N/A"
+scale=1
+mod=0
 
 if [ -f $ipc_file ]; then
   ipc_data=$(cat $ipc_file)
 fi
 
+# Raw fps/frametime should be divided by 10
+#
+if [ "$2" == "raw" ] || [ "$3" == "raw" ]; then
+  scale=10; mod=1
+fi
+
+
+# Example: ./dxvk_ipc frametime_max graph raw
+#
+if [ "$2" == "graph" ] || [ "$3" == "graph" ]; then
+  [ $(( ${ipc_data/\//}/$scale )) -ge 100 ] && echo -n 100 || echo -n $(( ${ipc_data/\//}/$scale + $mod ))
+  exit
+fi
+
+
+# Example: ./dxvk_ipc fps raw
+#
+if [ "$2" == "raw" ]; then
+  echo -n "$(( ${ipc_data/\//}/$scale )).$(( ${ipc_data/\//}%$scale ))"
+  exit
+fi
+
+
+# Example: ./dxvk_ipc version
+#
 chars=$(echo -n $ipc_data | wc -c)
 [ $chars -gt 1 ] && space= || space=' '
 echo -n "$ipc_data$space"
