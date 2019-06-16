@@ -1,1 +1,0 @@
-[ -f /tmp/dxvk/compiler ] && cat /tmp/dxvk/compiler | awk -F. '{if ($1 == "n/a") print 0; else print $1;}' || echo 0;

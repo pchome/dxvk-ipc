@@ -1,1 +1,0 @@
-[ -f /tmp/dxvk/frametime_max ] && cat /tmp/dxvk/frametime_max | awk -F. '{if ($1 == "n/a") print 0; else if ($1 > 100) print 100; else print $1;}' || echo 0;
